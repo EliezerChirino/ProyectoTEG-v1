@@ -1,0 +1,1 @@
+BASE_DATOS="C:\\Users\\Eliezer Chirino\\OneDrive\\Escritorio\\proyecto-teg\\server\\BD\\Dispositivos.db"

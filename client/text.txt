@@ -1,0 +1,555 @@
+import { useState, useEffect } from 'react'
+import reactLogo from './assets/react.svg'
+import viteLogo from '/vite.svg'
+import './App.css'
+import axios from "axios"
+
+function App() {
+  const [count, setCount] = useState(0)
+
+  const[array, setArray]= useState([])
+
+  const fechtAPI = async ()=>{
+    const response = await axios.get("http://localhost:8080/api/users");
+    console.log(response.data.users)
+    setArray(response.data.users)
+  }
+
+  useEffect(() =>{
+    fechtAPI()
+  }, [] )
+  return (
+    <>
+      <div>
+        <a href="https://vitejs.dev" target="_blank">
+          <img src={viteLogo} className="logo" alt="Vite logo" />
+        </a>
+        <a href="https://react.dev" target="_blank">
+          <img src={reactLogo} className="logo react" alt="React logo" />
+        </a>
+      </div>
+      <h1>Vite + React</h1>
+      <div className="card">
+        <button onClick={() => setCount((count) => count + 1)}>
+          count is {count}
+        </button>
+
+          {
+            array.map((user, index) =>(
+              <div key={index}>
+                <span >{user}</span> <br />
+              </div>
+            ))
+          }
+
+      </div>
+      <p className="read-the-docs">
+        Click on the Vite and React logos to learn more
+      </p>
+    </>
+  )
+}
+
+export default App
+
+from flask import Flask, jsonify, request
+from flask_cors import CORS
+import sqlite3 as sql
+
+from pysnmp.hlapi import *
+from constantes import BASE_DATOS
+import sqlite3 as sql
+from flask_socketio import SocketIO, emit
+import time
+
+
+
+
+
+
+import json
+
+app = Flask(__name__)
+
+# Configuración de CORS
+CORS(app, resources={r"/*": {"origins": "*"}})
+
+app.config['SECRET_KEY'] = 'secret!'
+socketio = SocketIO(app, cors_allowed_origins="*")  # Permitir cualquier origen para WebSockets
+
+# Tu código para la consulta SNMP
+def consulta_snmp(host, community, oid):
+    iterator = getCmd(
+        SnmpEngine(),
+        CommunityData(community, mpModel=1),  # SNMPv2c
+        UdpTransportTarget((host, 161), timeout=10, retries=3),  # Aumentamos el timeout y los reintentos
+        ContextData(),
+        ObjectType(ObjectIdentity(oid))
+    )
+    
+    errorIndication, errorStatus, errorIndex, varBinds = next(iterator)
+    if errorIndication:
+        return {"error": str(errorIndication)}
+    elif errorStatus:
+        return {"error": errorStatus.prettyPrint()}
+    else:
+        result = {}
+        for varBind in varBinds:
+            oid_str = '.'.join([str(x) for x in varBind[0].prettyPrint()])
+            result[oid_str] = str(varBind[1])
+        return result
+    
+# Ruta para consulta SNMP
+@app.route('/api/snmp/status', methods=['GET'])
+def get_network_status():
+    host = '192.168.12.129'  # IP de la laptop Lenovo
+    community = 'public'  # Comunidad SNMP
+    oid_descripcion_sistema = '1.3.6.1.2.1.1.1.0'
+    oid_nombre_sistema = '1.3.6.1.2.1.1.5.0'
+    oid_tiempo_actividad = '1.3.6.1.2.1.1.3.0'
+
+    status = {}
+    status.update(consulta_snmp(host, community, oid_descripcion_sistema))
+    status.update(consulta_snmp(host, community, oid_nombre_sistema))
+    status.update(consulta_snmp(host, community, oid_tiempo_actividad))
+
+    return jsonify(status)
+
+# Ruta para obtener el estado de dispositivos
+@app.route("/api/estado", methods=['GET'])
+def users():
+    conn = sql.connect(BASE_DATOS)
+    instruccion = "SELECT * FROM Devices"
+    cursor = conn.cursor()
+    cursor.execute(instruccion)
+    column_names = [description[0] for description in cursor.description]
+
+    # Obtener todos los resultados
+    resultados = cursor.fetchall()
+
+    # Crear una lista de diccionarios (cada diccionario es una fila)
+    json_data = []
+    for row in resultados:
+        json_data.append(dict(zip(column_names, row)))
+
+    conn.close()
+
+    # Devolver los datos en formato JSON
+    return jsonify(json_data)
+
+# Función para notificar a los clientes sobre actualizaciones
+def notify_clients():
+    while True:
+        time.sleep(5)  # Simular un cambio en la base de datos cada 5 segundos
+        conn = sql.connect(BASE_DATOS)
+        instruccion = "SELECT * FROM Devices"
+        cursor = conn.cursor()
+        cursor.execute(instruccion)
+        column_names = [description[0] for description in cursor.description]
+        resultados = cursor.fetchall()
+        json_data = []
+        for row in resultados:
+            json_data.append(dict(zip(column_names, row)))
+        conn.close()
+
+        # Emitir los datos a todos los clientes conectados
+        socketio.emit('updateData', json_data)
+
+@socketio.on('connect')
+def handle_connect():
+    print('Cliente conectado')
+
+@socketio.on('disconnect')
+def handle_disconnect():
+    print('Cliente desconectado')
+
+# Ruta para agregar un dispositivo
+@app.route('/api/devices', methods=['POST'])
+def add_device():
+    data = request.json  
+    conn = sql.connect(BASE_DATOS)  
+    
+    device_name = data.get('deviceName')
+    device_ip = data.get('deviceIP')
+    device_description = data.get('deviceDescription')
+    instruccion= (f"INSERT INTO Devices VALUES ('{device_name}', '{device_ip}', '{device_description}')")
+    cursor = conn.cursor()
+    cursor.execute(instruccion)
+    conn.commit()
+    conn.close()
+    print("Datos recibidos:", data)
+    return jsonify({"message": "Dispositivo registrado exitosamente!"}), 201
+
+if __name__ == "__main__":
+    socketio.start_background_task(notify_clients)  # Iniciar la tarea en segundo plano
+    socketio.run(app, debug=True, port=8080)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+from flask import Flask, jsonify, request
+from flask_cors import CORS
+import sqlite3 as sql
+from pysnmp.hlapi import *
+from constantes import BASE_DATOS
+import sqlite3 as sql
+from flask_socketio import SocketIO, emit
+import time
+import json
+
+app = Flask(__name__)
+
+
+CORS(app, resources={r"/*": {"origins": "*"}})
+
+app.config['SECRET_KEY'] = 'secret!'
+socketio = SocketIO(app, cors_allowed_origins="*")  # Permitir cualquier origen para WebSockets
+community = 'public'  # Comunidad SNMP
+
+
+task_running = False
+
+def consulta_snmp(host, community, oid):
+    # Implementación de consulta SNMP
+    pass
+
+def get_devices():
+    conn = sql.connect(BASE_DATOS)
+    instruccion = "SELECT * FROM Devices"
+    cursor = conn.cursor()
+    cursor.execute(instruccion)
+    column_names = [description[0] for description in cursor.description]
+    resultados = cursor.fetchall()
+    json_data = []
+    for row in resultados:
+        device_data = dict(zip(column_names, row))
+        json_data.append(device_data)
+    conn.close()
+    return json_data
+
+@app.route("/api/obtener_dispositivos", methods=['GET'])
+def obtener_dispotivos():
+    devices = get_devices()
+    return jsonify(devices)
+
+# Evento de conexión por WebSocket
+@socketio.on('connect')
+def handle_connect():
+    global task_running
+    print('Cliente conectado')
+    devices = get_devices()  # Obtener los dispositivos de la base de datos
+    socketio.emit('initialData', devices)  # Enviar los datos iniciales al cliente
+
+    # Iniciar la tarea de actualización solo si no está corriendo
+    if not task_running:
+        print("Iniciando la tarea de actualización")
+        task_running = True
+        socketio.start_background_task(notify_clients)
+
+# Evento de desconexión por WebSocket
+@socketio.on('disconnect')
+def handle_disconnect():
+    print('Cliente desconectado')
+
+# Tarea que emite actualizaciones de dispositivos cada 5 segundos
+def notify_clients():
+    global task_running
+    try:
+        while True:
+            print('Enviando datos actualizados a los clientes')
+            devices = get_devices()  
+            socketio.emit('updateData', devices)  
+            time.sleep(5)  # Se ajusta el tiempo de espera a 5 segundos
+    finally:
+        task_running = False  # Si el bucle termina, restablecer el estado
+
+@app.route("/api/dameIP", methods=['GET'])
+def dameIP():
+    # Lógica de manejo de IP
+    pass
+
+@app.route('/api/devices', methods=['POST'])
+def add_device():
+    # Lógica para añadir dispositivo
+    pass
+
+if __name__ == "__main__":
+    socketio.run(app, debug=True, port=8080)
+
+"""from flask import Flask, jsonify, request
+from flask_cors import CORS
+import sqlite3 as sql
+
+from pysnmp.hlapi import *
+from constantes import BASE_DATOS
+import sqlite3 as sql
+from flask_socketio import SocketIO, emit
+import time
+
+
+
+
+
+
+import json
+
+app = Flask(__name__)
+
+# Configuración de CORS
+CORS(app, resources={r"/*": {"origins": "*"}})
+
+app.config['SECRET_KEY'] = 'secret!'
+socketio = SocketIO(app, cors_allowed_origins="*")  # Permitir cualquier origen para WebSockets
+community = 'public'  # Comunidad SNMP
+oid_descripcion_sistema = '1.3.6.1.2.1.1.1.0'
+oid_nombre_sistema = '1.3.6.1.2.1.1.5.0'
+oid_tiempo_actividad = '1.3.6.1.2.1.1.3.0'
+
+
+
+
+def consulta_snmp(host, community, oid):
+    iterator = getCmd(
+        SnmpEngine(),
+        CommunityData(community, mpModel=1),  
+        UdpTransportTarget((host, 161), timeout=10, retries=1),  
+        ContextData(),
+        ObjectType(ObjectIdentity(oid))
+    )
+    
+    errorIndication, errorStatus, errorIndex, varBinds = next(iterator)
+    if errorIndication:
+        return {"error": str(errorIndication)}
+    elif errorStatus:
+        return {"error": errorStatus.prettyPrint()}
+    else:
+        result = {}
+        for varBind in varBinds:
+            oid_str = '.'.join([str(x) for x in varBind[0].prettyPrint()])
+            result[oid_str] = str(varBind[1])
+        return result
+    
+
+def get_devices():
+    conn = sql.connect(BASE_DATOS)
+    instruccion = "SELECT * FROM Devices"
+    cursor = conn.cursor()
+    cursor.execute(instruccion)
+    column_names = [description[0] for description in cursor.description]
+    resultados = cursor.fetchall()
+    json_data = []
+    for row in resultados:
+        device_data = dict(zip(column_names, row))
+        json_data.append(device_data)
+    conn.close()
+    return json_data
+
+
+@app.route("/api/obtener_dispositivos", methods=['GET'])
+def obtener_dispotivos():
+    print('este es el primer paso')
+    devices = get_devices()
+    return jsonify(devices)
+
+
+# Evento de conexión por WebSocket
+@socketio.on('connect')
+def handle_connect():
+    print('Cliente conectado')
+    devices = get_devices()  # Obtener los dispositivos de la base de datos
+    socketio.emit('initialData', devices)  # Enviar los datos iniciales al cliente
+    socketio.start_background_task(notify_clients)  # Iniciar la tarea de actualización
+
+
+# Evento de desconexión por WebSocket
+@socketio.on('disconnect')
+def handle_disconnect():
+    print('Cliente desconectado')
+
+# Tarea que emite actualizaciones de dispositivos cada 5 segundos
+def notify_clients():
+    while True:
+        print('entro aqui')
+        devices = get_devices()  
+        socketio.emit('updateData', devices)  
+        time.sleep(10)  
+
+@app.route("/api/dameIP", methods=['GET'])
+def dameIP():
+    ip = request.args.get('ip')
+    if ip:
+        print(f"Received IP: {ip}")
+        # Here you can add your logic to process the IP
+        return {"message": f"Received IP: {ip}"}, 200
+    else:
+        return {"error": "No IP provided"}, 400 
+
+
+
+
+
+
+
+
+
+@app.route('/api/devices', methods=['POST'])
+def add_device():
+    data = request.json  
+    conn = sql.connect(BASE_DATOS)  
+    
+    device_name = data.get('deviceName')
+    device_ip = data.get('deviceIP')
+    device_description = data.get('deviceDescription')
+    instruccion= (f"INSERT INTO Devices VALUES ('{device_name}', '{device_ip}', '{device_description}')")
+    cursor = conn.cursor()
+    cursor.execute(instruccion)
+    conn.commit()
+    conn.close()
+    print("Datos recibidos:", data)
+    return jsonify({"message": "Dispositivo registrado exitosamente!"}), 201
+
+if __name__ == "__main__":
+
+    socketio.run(app, debug=True, port=8080)
+"""
+
+
+
+# Ruta para consulta SNMP
+"""@app.route('/api/snmp/status', methods=['GET'])
+def get_network_status():
+    host = '192.168.12.129'  # IP de la laptop Lenovo
+    community = 'public'  # Comunidad SNMP
+    oid_descripcion_sistema = '1.3.6.1.2.1.1.1.0'
+    oid_nombre_sistema = '1.3.6.1.2.1.1.5.0'
+    oid_tiempo_actividad = '1.3.6.1.2.1.1.3.0'
+
+    
+    return jsonify(status)"""
+    
+    
+    
+    
+    
+    
+
+""" 
+@app.route("/api/estado", methods=['GET'])
+# Función para notificar a los clientes sobre actualizaciones
+def notify_clients():
+    while True:
+        time.sleep(5)  # Simular un cambio en la base de datos cada 5 segundos
+        conn = sql.connect(BASE_DATOS)
+        instruccion = "SELECT * FROM Devices"
+        cursor = conn.cursor()
+        cursor.execute(instruccion)
+        column_names = [description[0] for description in cursor.description]
+        resultados = cursor.fetchall()
+
+        json_data = []
+        for row in resultados:
+            device_data = dict(zip(column_names, row))
+            
+            
+            host = device_data['DeviceIP']
+            print(f"Consultando SNMP para el host: {host}")
+
+            try:
+                status = {}
+                
+                snmp_response = consulta_snmp(host, community, oid_descripcion_sistema)
+                
+                if "error" in snmp_response:
+                    device_data['status'] = False
+                    print(f"Error en consulta SNMP para {host}: {snmp_response['error']}")
+                else:
+                    status.update(snmp_response)
+                    print(status)
+                    device_data['status'] = True
+                    print(f"Dispositivo {host} está Online")
+
+            except Exception as e:
+                # Si hubo un error en la consulta SNMP, status será false
+                device_data['status'] = False
+                print(device_data['status'])
+                print(f"Error consultando {host}: {str(e)}")
+
+            json_data.append(device_data)
+
+        conn.close()
+
+        socketio.emit('updateData', json_data)"""
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+            const ipList = data.map(device => device.DeviceIP);
+            console.log('Lista de IPs:', ipList);  
+            ipList.forEach(ip => {
+                fetch(`http://localhost:8080/api/dameIP?ip=${ip}`)
+                .then(response => response.json())
+                .then(data => {
+                    console.log('Respuesta del servidor:', data);
+                })
+                .catch(error => {
+                    console.error('Error al enviar IP:', error);
+                });
+            });
